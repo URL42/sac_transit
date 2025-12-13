@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+httpx
+pandas
+pytz
+gtfs-realtime-bindings
