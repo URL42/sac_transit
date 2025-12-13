@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  transit-server:
+    build: .
+    image: sac-transit-server:latest
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      - TZ=America/Los_Angeles
