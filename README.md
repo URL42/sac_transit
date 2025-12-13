@@ -2,6 +2,9 @@
 
 FastAPI service plus a MicroPython client that shows Sacramento RT departures on a Pico W with a 20x4 I2C LCD. The server pulls static GTFS and GTFS-RT feeds, formats the next arrivals for a stop, and includes service alerts in a scrolling ticker.
 
+## Inspiration
+- Built after seeing Fil Bot's real-time BART display project: https://filbot.com/real-time-bart-display/
+
 ## Repo layout
 - `transit_server.py` – FastAPI app that caches SacRT GTFS static data and GTFS-RT trip/alert feeds and exposes `/api/display`.
 - `pico_w.py` – MicroPython code for the Pico W; writes to the LCD and polls the server on an interval.
