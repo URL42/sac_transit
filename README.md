@@ -36,8 +36,8 @@ python -m uvicorn transit_server:app --host 0.0.0.0 --port 8088 --http h11
 ```
 
 ## API
-- `GET /api/display?stop_id=STOP_ID&title=TITLE`  
-  Returns JSON with the stop title, three lines of `"<route> <mins>"` strings (or `--`), and a ticker built from GTFS alerts.
+- `GET /api/display?stop_id=STOP_ID&title=TITLE&route=ROUTE`  
+  Returns JSON with the stop title, three lines of `"<route> <mins>"` strings (or `--`), and a ticker built from GTFS alerts. Optional `route` can be a route short name (e.g., `6`) or `route_id` to filter alerts to that route only.
 
 Example response:
 ```json
@@ -52,6 +52,7 @@ Example response:
 1) Flash MicroPython to the Pico W.  
 2) Copy `pico_w.py` to the board as `main.py`.  
 3) Copy `secrets.py`, update `WIFI_SSID/PASSWORD`, `SERVER_BASE` (use your machine's LAN IP and port), `STOP_ID` (from SacRT GTFS `stop_id`), and `TITLE`.  
+   - Optional: set `ROUTE` to a route short name or `route_id` to filter alerts to that line.  
 4) Power the Pico; it will connect to Wi‑Fi, poll `/api/display`, and render two departure lines plus the scrolling alert ticker.
 
 ## How it works

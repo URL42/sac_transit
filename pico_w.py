@@ -9,7 +9,8 @@ try:
     from secrets import (
         WIFI_SSID, WIFI_PASSWORD,
         SERVER_BASE, STOP_ID, TITLE,
-        FETCH_EVERY_SEC, SCROLL_DELAY_SEC
+        FETCH_EVERY_SEC, SCROLL_DELAY_SEC,
+        ROUTE,
     )
 except Exception as e:
     raise RuntimeError("Missing/invalid secrets.py") from e
@@ -159,7 +160,8 @@ def format_board_line(route, mins, width=20):
 
 # ---------------- HTTP ----------------
 def fetch_payload():
-    url = f"{SERVER_BASE}/api/display?stop_id={STOP_ID}"
+    route_q = f"&route={ROUTE}" if ROUTE else ""
+    url = f"{SERVER_BASE}/api/display?stop_id={STOP_ID}{route_q}"
     r = urequests.get(url)
     try:
         return r.json()
@@ -211,4 +213,3 @@ while True:
 
     write_row(3, next(ticker_frames))
     time.sleep(SCROLL_DELAY_SEC)
-

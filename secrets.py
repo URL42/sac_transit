@@ -18,6 +18,8 @@ SERVER_BASE = "http://192.168.1.XXX:8088"
 
 STOP_ID = "1111"
 TITLE = "Whatever stop name or title you want"
+# Optional: limit alerts to a specific SacRT route (short name or route_id)
+ROUTE = None
 
 # -------------------------
 # Timing (seconds)

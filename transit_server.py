@@ -242,15 +242,53 @@ def next_scheduled_arrivals_for_stop(stop_id: str, limit: int = 3) -> List[str]:
     return out
 
 
-def get_alert_text(max_len: int = 160) -> str:
+def _route_ids_for_short_name(short_name: Optional[str]) -> Optional[Set[str]]:
+    if not short_name or cache.routes is None or cache.routes.empty:
+        return None
+
+    sn = str(short_name).strip().lower()
+    if not sn:
+        return None
+
+    routes = cache.routes.copy()
+    routes["route_short_name"] = routes["route_short_name"].astype(str).str.strip().str.lower()
+    routes["route_id"] = routes["route_id"].astype(str)
+
+    matched = routes[routes["route_short_name"] == sn]
+    if matched.empty:
+        # Allow passing an actual route_id as the filter as a fallback.
+        matched = routes[routes["route_id"].str.lower() == sn]
+
+    if matched.empty:
+        return set()
+
+    return set(matched["route_id"].tolist())
+
+
+def _alert_applies_to_routes(alert: gtfs_realtime_pb2.Alert, allowed_route_ids: Optional[Set[str]]) -> bool:
+    if allowed_route_ids is None:
+        return True
+
+    for ent in alert.informed_entity:
+        rid = str(ent.route_id or "").strip()
+        if rid and rid in allowed_route_ids:
+            return True
+    return False
+
+
+def get_alert_text(route_filter: Optional[str] = None, max_len: int = 160) -> str:
     if not cache.alerts:
         return "No alerts"
+
+    allowed_route_ids = _route_ids_for_short_name(route_filter)
 
     msgs: List[str] = []
     for ent in cache.alerts.entity:
         if not ent.HasField("alert"):
             continue
         alert = ent.alert
+        if not _alert_applies_to_routes(alert, allowed_route_ids):
+            continue
         txt = ""
         if alert.header_text and alert.header_text.translation:
             txt = alert.header_text.translation[0].text.strip()
@@ -278,6 +316,10 @@ async def root():
 async def display(
     stop_id: str = Query(...),
     title: str = Query("39th St WB"),
+    route: Optional[str] = Query(
+        None,
+        description="Route short name or route_id; filters alerts to this route if provided.",
+    ),
 ):
     await ensure_gtfs_loaded()
     await ensure_rt_loaded()
@@ -289,5 +331,5 @@ async def display(
     return {
         "title": title,
         "lines": [title, arrivals[0], arrivals[1], arrivals[2]],
-        "ticker": get_alert_text(),
+        "ticker": get_alert_text(route_filter=route),
     }
