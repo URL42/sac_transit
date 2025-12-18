@@ -3,7 +3,7 @@ import zipfile
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Set
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 import httpx
 import pandas as pd
@@ -86,7 +86,11 @@ async def ensure_gtfs_loaded():
 
 async def ensure_rt_loaded():
     now = time.time()
-    if cache.alerts is not None and (now - cache.rt_loaded_at) < RT_REFRESH_SECONDS:
+    if (
+        cache.trip_updates is not None
+        and cache.alerts is not None
+        and (now - cache.rt_loaded_at) < RT_REFRESH_SECONDS
+    ):
         return
 
     print("Loading GTFS-RT (alerts + trips)…")
@@ -242,6 +246,93 @@ def next_scheduled_arrivals_for_stop(stop_id: str, limit: int = 3) -> List[str]:
     return out
 
 
+def _route_name_for_ids(trip_id: str = "", route_id: str = "") -> str:
+    """
+    Best-effort route display name for a GTFS trip/route.
+    Prefers route_short_name, then route_long_name, then route_id/trip_id.
+    """
+    rid = str(route_id or "").strip()
+
+    if not rid and cache.trips is not None and not cache.trips.empty and trip_id:
+        trips = cache.trips
+        m = trips[trips["trip_id"].astype(str) == str(trip_id)]
+        if not m.empty and "route_id" in m.columns:
+            rid = str(m.iloc[0]["route_id"])
+
+    if rid and cache.routes is not None and not cache.routes.empty:
+        routes = cache.routes
+        m = routes[routes["route_id"].astype(str) == rid]
+        if not m.empty:
+            sn = str(m.iloc[0].get("route_short_name") or "").strip()
+            if sn:
+                return sn
+            ln = str(m.iloc[0].get("route_long_name") or "").strip()
+            if ln:
+                return ln
+            return rid
+
+    return rid or str(trip_id or "route?")
+
+
+def next_realtime_arrivals_for_stop(stop_id: str, limit: int = 3) -> List[str]:
+    """
+    Returns strings like 'Gold 9' (route + minutes) using GTFS-RT trip updates.
+
+    GTFS-RT stop_time_update.{arrival,departure}.time are Unix epoch seconds.
+    """
+    if cache.trip_updates is None:
+        return []
+
+    now_epoch = datetime.now(timezone.utc).timestamp()
+    target_stop = str(stop_id)
+
+    hits = []
+    for ent in cache.trip_updates.entity:
+        if not ent.HasField("trip_update"):
+            continue
+
+        tu = ent.trip_update
+        trip_id = str(tu.trip.trip_id or "").strip()
+        route_id = str(tu.trip.route_id or "").strip()
+
+        for stu in tu.stop_time_update:
+            if str(stu.stop_id or "") != target_stop:
+                continue
+
+            event_time = None
+            if stu.departure and stu.departure.time:
+                event_time = int(stu.departure.time)
+            elif stu.arrival and stu.arrival.time:
+                event_time = int(stu.arrival.time)
+
+            if not event_time:
+                continue
+
+            mins = int((event_time - now_epoch) // 60)
+            # Ignore stale updates and clearly bogus far-future times.
+            if mins < -2 or mins > 12 * 60:
+                continue
+
+            hits.append((event_time, _route_name_for_ids(trip_id=trip_id, route_id=route_id), max(0, mins)))
+
+    if not hits:
+        return []
+
+    hits.sort(key=lambda x: x[0])
+    out: List[str] = []
+    seen = set()
+    for _, rname, mins in hits:
+        key = (rname, mins)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{rname} {mins}")
+        if len(out) >= limit:
+            break
+
+    return out
+
+
 def _route_ids_for_short_name(short_name: Optional[str]) -> Optional[Set[str]]:
     if not short_name or cache.routes is None or cache.routes.empty:
         return None
@@ -324,7 +415,11 @@ async def display(
     await ensure_gtfs_loaded()
     await ensure_rt_loaded()
 
-    arrivals = next_scheduled_arrivals_for_stop(stop_id, limit=3)
+    arrivals = next_realtime_arrivals_for_stop(stop_id, limit=3)
+    source = "realtime"
+    if not arrivals:
+        arrivals = next_scheduled_arrivals_for_stop(stop_id, limit=3)
+        source = "schedule"
     while len(arrivals) < 3:
         arrivals.append("--")
 
@@ -332,4 +427,5 @@ async def display(
         "title": title,
         "lines": [title, arrivals[0], arrivals[1], arrivals[2]],
         "ticker": get_alert_text(route_filter=route),
+        "source": source,
     }
