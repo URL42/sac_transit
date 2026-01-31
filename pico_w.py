@@ -1,5 +1,3 @@
-#Save this file on your pico w as main.py
-
 import time
 import network
 import urequests
@@ -105,11 +103,12 @@ def wifi_connect():
     if wlan.isconnected():
         return wlan
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-    for _ in range(80):
+    # Wait for connection with a timeout
+    for _ in range(20): # 20 * 0.5s = 10s timeout
         if wlan.isconnected():
-            break
-        time.sleep(0.25)
-    return wlan
+            return wlan
+        time.sleep(0.5)
+    return wlan # Will return a non-connected wlan if timeout is reached
 
 
 # ---------------- Formatting ----------------
@@ -177,39 +176,47 @@ write_row(1, "Booting...")
 write_row(2, "WiFi...")
 write_row(3, "Booting...")
 
+# FIX: Add a delay for power to stabilize before starting WiFi
+time.sleep(2)
+
 wlan = wifi_connect()
+
+# FIX: Only proceed if WiFi is actually connected
 if wlan.isconnected():
     write_row(2, f"IP {wlan.ifconfig()[0]}")
+    time.sleep(3) # Short delay for network routes to establish
+
+    ticker_frames = marquee_frames("Booting...")
+    last_fetch = 0
+
+    while True:
+        now = time.time()
+
+        if (now - last_fetch) >= FETCH_EVERY_SEC:
+            try:
+                payload = fetch_payload()
+                lines = payload.get("lines", [TITLE, "--", "--", "--"])
+                ticker = payload.get("ticker", "No alerts")
+
+                write_row(0, TITLE)
+
+                r1, m1 = parse_route_mins(lines[1])
+                r2, m2 = parse_route_mins(lines[2])
+
+                write_row(1, format_board_line(r1, m1))
+                # The IP on row 2 is intentionally overwritten by the second arrival line
+                write_row(2, format_board_line(r2, m2))
+
+                ticker_frames = marquee_frames(ticker)
+
+            except Exception as e:
+                write_row(1, "Fetch error")
+                write_row(2, str(e)[:20])
+
+            last_fetch = now
+
+        write_row(3, next(ticker_frames))
+        time.sleep(SCROLL_DELAY_SEC)
 else:
+    # This will now be the final state if the WiFi connection fails
     write_row(2, "WiFi FAILED")
-
-ticker_frames = marquee_frames("Booting...")
-last_fetch = 0
-
-while True:
-    now = time.time()
-
-    if (now - last_fetch) >= FETCH_EVERY_SEC:
-        try:
-            payload = fetch_payload()
-            lines = payload.get("lines", [TITLE, "--", "--", "--"])
-            ticker = payload.get("ticker", "No alerts")
-
-            write_row(0, TITLE)
-
-            r1, m1 = parse_route_mins(lines[1])
-            r2, m2 = parse_route_mins(lines[2])
-
-            write_row(1, format_board_line(r1, m1))
-            write_row(2, format_board_line(r2, m2))
-
-            ticker_frames = marquee_frames(ticker)
-
-        except Exception as e:
-            write_row(1, "Fetch error")
-            write_row(2, str(e)[:20])
-
-        last_fetch = now
-
-    write_row(3, next(ticker_frames))
-    time.sleep(SCROLL_DELAY_SEC)
