@@ -13,7 +13,6 @@ try:
 except Exception as e:
     raise RuntimeError("Missing/invalid secrets.py") from e
 
-
 # ---------------- LCD (PCF8574 @ 0x27) ----------------
 i2c = I2C(0, sda=Pin(4), scl=Pin(5), freq=400000)
 ADDR = 0x27
@@ -23,7 +22,10 @@ MASK_E  = 0x04
 MASK_BL = 0x08
 
 def i2c_write(b):
-    i2c.writeto(ADDR, bytes([b]))
+    try:
+        i2c.writeto(ADDR, bytes([b]))
+    except:
+        pass # Ignore I2C errors during boot stabilization
 
 def pulse_enable(data):
     i2c_write(data | MASK_E)
@@ -52,7 +54,7 @@ def ch(c):
 
 def clear():
     cmd(0x01)
-    time.sleep_ms(2)
+    time.sleep_ms(5)
 
 ROW_OFFSETS = [0x00, 0x40, 0x14, 0x54]
 def set_cursor(col, row):
@@ -65,14 +67,15 @@ def putstr(s):
         ch(c)
 
 def init_lcd():
-    time.sleep_ms(50)
+    # Wait for LCD controller to power up fully
+    time.sleep_ms(200) 
     write4(0x03); time.sleep_ms(5)
-    write4(0x03); time.sleep_us(150)
-    write4(0x03); time.sleep_us(150)
-    write4(0x02); time.sleep_us(150)
-    cmd(0x28)
-    cmd(0x0C)
-    cmd(0x06)
+    write4(0x03); time.sleep_ms(5)
+    write4(0x03); time.sleep_ms(5)
+    write4(0x02); time.sleep_ms(5)
+    cmd(0x28) # 4-bit, 2-line, 5x8
+    cmd(0x0C) # Display on, cursor off
+    cmd(0x06) # Entry mode
     clear()
 
 def pad_right(s, width):
@@ -100,58 +103,40 @@ def marquee_frames(text, width=20, pad="    "):
 def wifi_connect():
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    if wlan.isconnected():
-        return wlan
-    wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-    # Wait for connection with a timeout
-    for _ in range(20): # 20 * 0.5s = 10s timeout
-        if wlan.isconnected():
-            return wlan
-        time.sleep(0.5)
-    return wlan # Will return a non-connected wlan if timeout is reached
+    
+    if not wlan.isconnected():
+        write_row(2, "Connecting WiFi...")
+        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+        
+        # 15-second connection attempt loop
+        for _ in range(15):
+            if wlan.isconnected():
+                return True
+            time.sleep(1)
+            
+    return wlan.isconnected()
 
 
 # ---------------- Formatting ----------------
 def parse_route_mins(line):
-    """
-    Expecting 'Gold 9' from server.
-    Returns (route, mins_int) or (None, None).
-    """
     if not line or line == "--":
         return None, None
-
     parts = str(line).strip().split()
     if len(parts) < 2:
         return None, None
-
     route = parts[0]
     try:
         mins = int(parts[1])
-    except Exception:
+    except:
         return None, None
-
     return route, mins
 
 def format_board_line(route, mins, width=20):
-    """
-    Route on left. Right-aligned status/mins on right.
-
-    Rule:
-      mins <= 1  => '<NOW BOARDING>'
-      else       => '9 MIN'
-    """
     if route is None or mins is None:
         return "--"
-
-    # clamp weird negatives
-    if mins < 0:
-        mins = 0
-
-    if mins <= 1:
-        right = "<NOW BOARDING>"
-    else:
-        right = f"{mins} MIN"
-
+    if mins < 0: mins = 0
+    
+    right = "<NOW BOARDING>" if mins <= 1 else f"{mins} MIN"
     left_width = max(0, width - len(right))
     left = pad_right(route, left_width)
     return (left + right)[:width]
@@ -168,55 +153,60 @@ def fetch_payload():
         r.close()
 
 
-# ---------------- Main loop ----------------
+# ---------------- Main Execution ----------------
+
+# 1. Hardware Init
 init_lcd()
-
 write_row(0, TITLE)
-write_row(1, "Booting...")
-write_row(2, "WiFi...")
-write_row(3, "Booting...")
+write_row(1, "System Booting...")
 
-# FIX: Add a delay for power to stabilize before starting WiFi
+# 2. Persistent WiFi Connection
+while True:
+    if wifi_connect():
+        break
+    write_row(2, "WiFi Failed. Retry...")
+    time.sleep(5)
+
+wlan = network.WLAN(network.STA_IF)
+write_row(1, "WiFi Connected")
+write_row(2, f"IP: {wlan.ifconfig()[0]}")
 time.sleep(2)
 
-wlan = wifi_connect()
+# 3. App Loop
+ticker_frames = marquee_frames("Fetching data...")
+last_fetch = 0
 
-# FIX: Only proceed if WiFi is actually connected
-if wlan.isconnected():
-    write_row(2, f"IP {wlan.ifconfig()[0]}")
-    time.sleep(3) # Short delay for network routes to establish
+while True:
+    now = time.time()
 
-    ticker_frames = marquee_frames("Booting...")
-    last_fetch = 0
+    # Network Fetch
+    if (now - last_fetch) >= FETCH_EVERY_SEC:
+        try:
+            payload = fetch_payload()
+            lines = payload.get("lines", [TITLE, "--", "--", "--"])
+            ticker = payload.get("ticker", "No alerts")
 
-    while True:
-        now = time.time()
+            write_row(0, TITLE)
+            r1, m1 = parse_route_mins(lines[1])
+            r2, m2 = parse_route_mins(lines[2])
 
-        if (now - last_fetch) >= FETCH_EVERY_SEC:
-            try:
-                payload = fetch_payload()
-                lines = payload.get("lines", [TITLE, "--", "--", "--"])
-                ticker = payload.get("ticker", "No alerts")
+            write_row(1, format_board_line(r1, m1))
+            write_row(2, format_board_line(r2, m2))
+            ticker_frames = marquee_frames(ticker)
+            
+        except Exception as e:
+            write_row(1, "Fetch error")
+            write_row(2, str(e)[:20])
+            # If network fails, wait a bit before trying again
+            time.sleep(5) 
 
-                write_row(0, TITLE)
+        last_fetch = now
 
-                r1, m1 = parse_route_mins(lines[1])
-                r2, m2 = parse_route_mins(lines[2])
-
-                write_row(1, format_board_line(r1, m1))
-                # The IP on row 2 is intentionally overwritten by the second arrival line
-                write_row(2, format_board_line(r2, m2))
-
-                ticker_frames = marquee_frames(ticker)
-
-            except Exception as e:
-                write_row(1, "Fetch error")
-                write_row(2, str(e)[:20])
-
-            last_fetch = now
-
+    # Update Marquee
+    try:
         write_row(3, next(ticker_frames))
-        time.sleep(SCROLL_DELAY_SEC)
-else:
-    # This will now be the final state if the WiFi connection fails
-    write_row(2, "WiFi FAILED")
+    except StopIteration:
+        ticker_frames = marquee_frames("No alerts")
+        
+    time.sleep(SCROLL_DELAY_SEC)
+
